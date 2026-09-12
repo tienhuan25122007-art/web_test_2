@@ -56,9 +56,10 @@
   <!-- Cột trái: Form nhập liệu + Bộ lọc + Danh sách giao dịch -->
   <section class="col col-main">
 
-    <!-- Form thêm giao dịch -->
+    <!-- Form thêm / sửa giao dịch -->
     <div class="panel">
-      <h2 class="panel-title">Thêm giao dịch</h2>
+      <!-- [CẬP NHẬT] Tiêu đề đổi động giữa "Thêm giao dịch" và "Chỉnh sửa giao dịch" -->
+      <h2 class="panel-title" id="formPanelTitle">Thêm giao dịch</h2>
       <form id="transactionForm" class="tx-form">
         <div class="type-switch" role="radiogroup" aria-label="Loại giao dịch">
           <button type="button" class="type-btn type-income active" data-type="income">Khoản thu</button>
@@ -68,7 +69,13 @@
         <div class="field-row">
           <div class="field">
             <label for="amountInput">Số tiền (₫)</label>
-            <input type="number" id="amountInput" min="0" step="1000" placeholder="0" required>
+            <!--
+              [SỬA LỖI/NÂNG CẤP] Đổi input số tiền từ type="number" sang type="text"
+              + inputmode="numeric" để có thể tự định dạng dấu phân cách hàng nghìn
+              (VD: 1.000.000) ngay khi người dùng gõ, giúp tránh đếm nhầm số chữ số 0.
+              Giá trị số thực được tách ra bằng hàm getAmountValue() trong script.js.
+            -->
+            <input type="text" inputmode="numeric" autocomplete="off" id="amountInput" placeholder="0" required>
           </div>
           <div class="field">
             <label for="dateInput">Ngày</label>
@@ -89,7 +96,9 @@
 
         <div class="field-row field-row-end">
           <button type="button" id="manageCategoriesBtn" class="btn btn-text">Quản lý danh mục</button>
-          <button type="submit" class="btn btn-primary">Lưu giao dịch</button>
+          <!-- [MỚI] Nút hủy chỉnh sửa, chỉ hiện khi đang sửa một giao dịch -->
+          <button type="button" id="cancelEditBtn" class="btn btn-text" hidden>Hủy chỉnh sửa</button>
+          <button type="submit" id="submitBtn" class="btn btn-primary">Lưu giao dịch</button>
         </div>
       </form>
     </div>
@@ -153,6 +162,13 @@
           </tbody>
         </table>
         <p id="emptyState" class="empty-state" hidden>Chưa có giao dịch nào phù hợp. Hãy thêm giao dịch đầu tiên ở trên.</p>
+
+        <!-- [MỚI] Thanh phân trang — chỉ hiện khi có nhiều hơn 1 trang -->
+        <div class="pagination" id="pagination" hidden>
+          <button type="button" id="prevPageBtn" class="btn btn-outline btn-sm">‹ Trước</button>
+          <span id="pageIndicator" class="page-indicator"></span>
+          <button type="button" id="nextPageBtn" class="btn btn-outline btn-sm">Sau ›</button>
+        </div>
       </div>
     </div>
   </section>
@@ -160,7 +176,8 @@
   <!-- Cột phải: Biểu đồ thống kê -->
   <aside class="col col-side">
     <div class="panel">
-      <h2 class="panel-title">Chi tiêu theo danh mục</h2>
+      <!-- [CẬP NHẬT] Ghi chú rõ biểu đồ phản ánh đúng bộ lọc đang áp dụng -->
+      <h2 class="panel-title">Chi tiêu theo danh mục <span class="panel-sub">(theo bộ lọc)</span></h2>
       <div class="chart-box">
         <canvas id="pieChart"></canvas>
       </div>
@@ -168,7 +185,7 @@
     </div>
 
     <div class="panel">
-      <h2 class="panel-title">Thu chi theo tháng</h2>
+      <h2 class="panel-title">Thu chi theo tháng <span class="panel-sub">(theo bộ lọc)</span></h2>
       <div class="chart-box">
         <canvas id="barChart"></canvas>
       </div>
@@ -180,6 +197,20 @@
 <footer class="app-footer">
   <p>Dữ liệu được lưu trực tiếp trên trình duyệt của bạn (localStorage) — không gửi lên máy chủ nào.</p>
 </footer>
+
+<!-- =====================================================================
+     [MỚI] Modal xác nhận xóa — thay thế window.confirm() mặc định
+     ===================================================================== -->
+<div class="modal-overlay" id="confirmModal" hidden>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
+    <h3 id="confirmModalTitle">Xóa giao dịch?</h3>
+    <p id="confirmModalMessage">Bạn có chắc chắn muốn xóa giao dịch này? Hành động này không thể hoàn tác.</p>
+    <div class="modal-actions">
+      <button type="button" id="confirmModalCancel" class="btn btn-outline">Hủy</button>
+      <button type="button" id="confirmModalOk" class="btn btn-danger">Xóa</button>
+    </div>
+  </div>
+</div>
 
 <script src="script.js"></script>
 </body>

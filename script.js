@@ -1,8 +1,19 @@
 /* =====================================================================
-   SỔ CHI TIÊU — script.js
-   Toàn bộ logic: lưu trữ localStorage, thêm/xóa giao dịch, lọc/tìm kiếm,
-   quản lý danh mục, vẽ biểu đồ, xuất CSV, chế độ sáng/tối.
-   Không phụ thuộc backend — mọi dữ liệu nằm trên trình duyệt người dùng.
+   SỔ CHI TIÊU — script.js (v2 — refactor)
+   Toàn bộ logic: lưu trữ localStorage, thêm/sửa/xóa giao dịch, lọc/tìm
+   kiếm, quản lý danh mục, vẽ biểu đồ theo bộ lọc, phân trang, xuất CSV,
+   chế độ sáng/tối. Không phụ thuộc backend.
+
+   TÓM TẮT THAY ĐỔI SO VỚI BẢN TRƯỚC (đánh dấu [MỚI]/[SỬA LỖI] tại chỗ):
+   1. Modal xác nhận xóa thay cho window.confirm().
+   2. Biểu đồ tròn & cột vẽ theo danh sách ĐÃ LỌC (getFilteredTransactions()).
+   3. Biểu đồ cột liệt kê tháng liên tục theo thời gian, tự điền 0 cho
+      tháng không có dữ liệu, luôn lấy 6 tháng gần nhất theo chuỗi liên tục.
+   4. Thêm chức năng Sửa giao dịch ngay trên form nhập liệu.
+   5. Ô nhập số tiền tự định dạng dấu phân cách hàng nghìn khi gõ.
+   6. Sau khi thêm giao dịch mới: chọn lại danh mục đầu tiên + focus lại
+      ô số tiền.
+   7. Phân trang bảng giao dịch, 10 dòng/trang.
    ===================================================================== */
 
 (function () {
@@ -20,11 +31,17 @@
     expense: ["Ăn uống", "Mua sắm", "Đi lại", "Giải trí", "Hóa đơn", "Khác"],
   };
 
+  // [MỚI] Số dòng hiển thị trên mỗi trang của bảng giao dịch
+  const PAGE_SIZE = 10;
+
   /* ------------------------- Trạng thái ứng dụng ------------------------- */
   let transactions = loadTransactions();
   let categories = loadCategories();
   let currentType = "income"; // loại đang chọn trên form
   let filters = { type: "all", category: "all", from: "", to: "", search: "" };
+  let currentPage = 1; // [MỚI] trang hiện tại của bảng giao dịch
+  let editingId = null; // [MỚI] id giao dịch đang được sửa, null = đang ở chế độ thêm mới
+  let pendingConfirmAction = null; // [MỚI] hành động sẽ chạy khi người dùng bấm "Xóa" trong modal
 
   let pieChart = null;
   let barChart = null;
@@ -32,11 +49,14 @@
   /* ------------------------- Tham chiếu DOM ------------------------- */
   const el = {
     form: document.getElementById("transactionForm"),
+    formPanelTitle: document.getElementById("formPanelTitle"),
     typeButtons: document.querySelectorAll(".type-btn"),
     amountInput: document.getElementById("amountInput"),
     dateInput: document.getElementById("dateInput"),
     categorySelect: document.getElementById("categorySelect"),
     noteInput: document.getElementById("noteInput"),
+    submitBtn: document.getElementById("submitBtn"),
+    cancelEditBtn: document.getElementById("cancelEditBtn"),
 
     balanceValue: document.getElementById("balanceValue"),
     totalIncome: document.getElementById("totalIncome"),
@@ -68,6 +88,18 @@
     pieChartCanvas: document.getElementById("pieChart"),
     barChartCanvas: document.getElementById("barChart"),
     pieEmptyState: document.getElementById("pieEmptyState"),
+
+    // [MỚI] Phân trang
+    pagination: document.getElementById("pagination"),
+    pageIndicator: document.getElementById("pageIndicator"),
+    prevPageBtn: document.getElementById("prevPageBtn"),
+    nextPageBtn: document.getElementById("nextPageBtn"),
+
+    // [MỚI] Modal xác nhận xóa
+    confirmModal: document.getElementById("confirmModal"),
+    confirmModalMessage: document.getElementById("confirmModalMessage"),
+    confirmModalOk: document.getElementById("confirmModalOk"),
+    confirmModalCancel: document.getElementById("confirmModalCancel"),
   };
 
   /* ====================================================================
@@ -141,6 +173,39 @@
   }
 
   /* ====================================================================
+     [MỚI] ĐỊNH DẠNG SỐ TIỀN REAL-TIME TRONG Ô INPUT
+     Người dùng gõ số thô (VD "1000000"), ô input tự hiển thị "1.000.000".
+     Giá trị số thực luôn được lấy lại bằng cách bóc tách ký tự số qua
+     getAmountValue() — tách biệt "hiển thị" và "dữ liệu" để tránh lỗi.
+     ==================================================================== */
+  function formatAmountDisplay(digitsOnly) {
+    if (!digitsOnly) return "";
+    const num = parseInt(digitsOnly, 10);
+    if (isNaN(num)) return "";
+    return num.toLocaleString("vi-VN");
+  }
+
+  function setAmountInputValue(num) {
+    el.amountInput.value = formatAmountDisplay(String(Math.round(num)));
+  }
+
+  function getAmountValue() {
+    const digits = el.amountInput.value.replace(/\D/g, "");
+    return digits ? parseInt(digits, 10) : NaN;
+  }
+
+  el.amountInput.addEventListener("input", () => {
+    const wasAtEnd = el.amountInput.selectionStart === el.amountInput.value.length;
+    const digitsOnly = el.amountInput.value.replace(/\D/g, "");
+    el.amountInput.value = formatAmountDisplay(digitsOnly);
+    // Định dạng lại có thể làm thay đổi độ dài chuỗi (thêm/bớt dấu chấm) —
+    // đưa con trỏ về cuối để người dùng không bị "nhảy" vị trí gõ.
+    if (wasAtEnd) {
+      el.amountInput.setSelectionRange(el.amountInput.value.length, el.amountInput.value.length);
+    }
+  });
+
+  /* ====================================================================
      FORM: chuyển đổi Thu / Chi + danh mục tương ứng
      ==================================================================== */
   el.typeButtons.forEach((btn) => {
@@ -162,36 +227,128 @@
   el.dateInput.value = todayIso();
 
   /* ====================================================================
-     THÊM GIAO DỊCH
+     [MỚI] CHẾ ĐỘ SỬA GIAO DỊCH
+     Tái sử dụng chính form thêm mới: đổ dữ liệu giao dịch cần sửa vào
+     form, đổi tiêu đề + nhãn nút, và khi submit sẽ cập nhật thay vì tạo
+     bản ghi mới. Có nút "Hủy chỉnh sửa" để quay lại chế độ thêm mới.
+     ==================================================================== */
+  function startEditTransaction(id) {
+    const tx = transactions.find((t) => t.id === id);
+    if (!tx) return;
+
+    editingId = id;
+    currentType = tx.type;
+    el.typeButtons.forEach((b) => b.classList.toggle("active", b.dataset.type === tx.type));
+    populateCategorySelect();
+    el.categorySelect.value = tx.category;
+    setAmountInputValue(tx.amount);
+    el.dateInput.value = tx.date;
+    el.noteInput.value = tx.note;
+
+    el.formPanelTitle.textContent = "Chỉnh sửa giao dịch";
+    el.submitBtn.textContent = "Cập nhật giao dịch";
+    el.cancelEditBtn.hidden = false;
+
+    el.form.scrollIntoView({ behavior: "smooth", block: "start" });
+    el.amountInput.focus();
+  }
+
+  function exitEditMode() {
+    editingId = null;
+    el.formPanelTitle.textContent = "Thêm giao dịch";
+    el.submitBtn.textContent = "Lưu giao dịch";
+    el.cancelEditBtn.hidden = true;
+
+    currentType = "income";
+    el.typeButtons.forEach((b) => b.classList.toggle("active", b.dataset.type === "income"));
+    populateCategorySelect();
+    el.amountInput.value = "";
+    el.noteInput.value = "";
+    el.dateInput.value = todayIso();
+  }
+
+  el.cancelEditBtn.addEventListener("click", exitEditMode);
+
+  /* ====================================================================
+     THÊM / CẬP NHẬT GIAO DỊCH
      ==================================================================== */
   el.form.addEventListener("submit", (e) => {
     e.preventDefault();
 
-    const amount = parseFloat(el.amountInput.value);
+    const amount = getAmountValue();
     if (!amount || amount <= 0) {
       el.amountInput.focus();
       return;
     }
 
-    const tx = {
-      id: generateId(),
-      type: currentType,
-      amount: Math.round(amount),
-      category: el.categorySelect.value,
-      date: el.dateInput.value || todayIso(),
-      note: el.noteInput.value.trim(),
-      createdAt: Date.now(),
-    };
+    if (editingId) {
+      // [MỚI] Chế độ sửa: cập nhật giao dịch đã tồn tại thay vì tạo mới
+      const tx = transactions.find((t) => t.id === editingId);
+      if (tx) {
+        tx.type = currentType;
+        tx.amount = Math.round(amount);
+        tx.category = el.categorySelect.value;
+        tx.date = el.dateInput.value || todayIso();
+        tx.note = el.noteInput.value.trim();
+      }
+      saveTransactions();
+      exitEditMode();
+    } else {
+      const tx = {
+        id: generateId(),
+        type: currentType,
+        amount: Math.round(amount),
+        category: el.categorySelect.value,
+        date: el.dateInput.value || todayIso(),
+        note: el.noteInput.value.trim(),
+        createdAt: Date.now(),
+      };
+      transactions.push(tx);
+      saveTransactions();
 
-    transactions.push(tx);
-    saveTransactions();
-
-    // Reset form nhưng giữ nguyên loại giao dịch và ngày đã chọn
-    el.amountInput.value = "";
-    el.noteInput.value = "";
-    el.amountInput.focus();
+      // [CẬP NHẬT — UX] Sau khi thêm thành công: xóa số tiền/ghi chú,
+      // chọn lại danh mục đầu tiên trong danh sách, và focus về ô số tiền
+      // để người dùng nhập liên tiếp nhiều giao dịch nhanh hơn.
+      el.amountInput.value = "";
+      el.noteInput.value = "";
+      if (el.categorySelect.options.length > 0) {
+        el.categorySelect.selectedIndex = 0;
+      }
+      el.amountInput.focus();
+    }
 
     refreshAll();
+  });
+
+  /* ====================================================================
+     [MỚI] MODAL XÁC NHẬN (dùng chung cho việc xóa giao dịch)
+     Thay cho window.confirm() mặc định — giữ đúng phong cách thiết kế
+     và cho phép đóng bằng nút Hủy, click ra ngoài, hoặc phím Esc.
+     ==================================================================== */
+  function showConfirmModal(message, onConfirm) {
+    el.confirmModalMessage.textContent = message;
+    pendingConfirmAction = onConfirm;
+    el.confirmModal.hidden = false;
+    el.confirmModalOk.focus();
+  }
+
+  function hideConfirmModal() {
+    el.confirmModal.hidden = true;
+    pendingConfirmAction = null;
+  }
+
+  el.confirmModalCancel.addEventListener("click", hideConfirmModal);
+  el.confirmModalOk.addEventListener("click", () => {
+    if (typeof pendingConfirmAction === "function") pendingConfirmAction();
+    hideConfirmModal();
+  });
+  // Click ra ngoài modal-box (lên overlay) để đóng
+  el.confirmModal.addEventListener("click", (e) => {
+    if (e.target === el.confirmModal) hideConfirmModal();
+  });
+  // Nhấn Esc để đóng
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !el.confirmModal.hidden) hideConfirmModal();
   });
 
   /* ====================================================================
@@ -200,6 +357,8 @@
   function deleteTransaction(id) {
     transactions = transactions.filter((t) => t.id !== id);
     saveTransactions();
+    // Nếu đang sửa đúng giao dịch vừa bị xóa thì thoát chế độ sửa
+    if (editingId === id) exitEditMode();
     refreshAll();
   }
 
@@ -220,25 +379,34 @@
       .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.createdAt - a.createdAt));
   }
 
+  // [CẬP NHẬT] Mỗi lần đổi bộ lọc: quay về trang 1 và vẽ lại cả bảng lẫn
+  // biểu đồ, vì giờ biểu đồ cũng phụ thuộc vào bộ lọc.
+  function onFiltersChanged() {
+    currentPage = 1;
+    renderTable();
+    renderPieChart();
+    renderBarChart();
+  }
+
   el.searchInput.addEventListener("input", () => {
     filters.search = el.searchInput.value;
-    renderTable();
+    onFiltersChanged();
   });
   el.filterType.addEventListener("change", () => {
     filters.type = el.filterType.value;
-    renderTable();
+    onFiltersChanged();
   });
   el.filterCategory.addEventListener("change", () => {
     filters.category = el.filterCategory.value;
-    renderTable();
+    onFiltersChanged();
   });
   el.filterFrom.addEventListener("change", () => {
     filters.from = el.filterFrom.value;
-    renderTable();
+    onFiltersChanged();
   });
   el.filterTo.addEventListener("change", () => {
     filters.to = el.filterTo.value;
-    renderTable();
+    onFiltersChanged();
   });
   el.clearFiltersBtn.addEventListener("click", () => {
     filters = { type: "all", category: "all", from: "", to: "", search: "" };
@@ -247,7 +415,7 @@
     el.filterCategory.value = "all";
     el.filterFrom.value = "";
     el.filterTo.value = "";
-    renderTable();
+    onFiltersChanged();
   });
 
   function populateFilterCategoryOptions() {
@@ -260,17 +428,28 @@
   }
 
   /* ====================================================================
-     HIỂN THỊ BẢNG GIAO DỊCH
+     HIỂN THỊ BẢNG GIAO DỊCH + [MỚI] PHÂN TRANG
      ==================================================================== */
   function renderTable() {
     const list = getFilteredTransactions();
+    const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+
+    // Giữ currentPage trong phạm vi hợp lệ (VD sau khi xóa hết dòng ở trang cuối)
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+
     el.tableBody.innerHTML = "";
 
     if (list.length === 0) {
       el.emptyState.hidden = false;
+      el.pagination.hidden = true;
     } else {
       el.emptyState.hidden = true;
-      list.forEach((t) => {
+
+      const startIdx = (currentPage - 1) * PAGE_SIZE;
+      const pageItems = list.slice(startIdx, startIdx + PAGE_SIZE);
+
+      pageItems.forEach((t) => {
         const tr = document.createElement("tr");
         const sign = t.type === "income" ? "+" : "−";
         const amountClass = t.type === "income" ? "amount-income" : "amount-expense";
@@ -280,20 +459,60 @@
           <td><span class="category-tag">${escapeHtml(t.category)}</span></td>
           <td class="note-cell">${escapeHtml(t.note) || "—"}</td>
           <td class="amount-cell ${amountClass}">${sign} ${formatCurrency(t.amount)}</td>
-          <td class="col-action"><button class="btn-danger-text" data-delete-id="${t.id}" title="Xóa giao dịch">Xóa</button></td>
+          <td class="col-action">
+            <div class="row-actions">
+              <button class="btn-link-text" data-edit-id="${t.id}" title="Sửa giao dịch">Sửa</button>
+              <button class="btn-danger-text" data-delete-id="${t.id}" title="Xóa giao dịch">Xóa</button>
+            </div>
+          </td>
         `;
         el.tableBody.appendChild(tr);
       });
+
+      // [MỚI] Cập nhật thanh phân trang — chỉ hiện khi có nhiều hơn 1 trang
+      if (totalPages > 1) {
+        el.pagination.hidden = false;
+        el.pageIndicator.textContent = `Trang ${currentPage}/${totalPages} · ${list.length} giao dịch`;
+        el.prevPageBtn.disabled = currentPage === 1;
+        el.nextPageBtn.disabled = currentPage === totalPages;
+      } else {
+        el.pagination.hidden = true;
+      }
     }
 
-    // Gắn sự kiện xóa cho các nút vừa được tạo
+    // Gắn sự kiện xóa/sửa cho các nút vừa được tạo
     el.tableBody.querySelectorAll("[data-delete-id]").forEach((btn) => {
-      btn.addEventListener("click", () => deleteTransaction(btn.dataset.deleteId));
+      btn.addEventListener("click", () => {
+        showConfirmModal(
+          "Bạn có chắc chắn muốn xóa giao dịch này? Hành động này không thể hoàn tác.",
+          () => deleteTransaction(btn.dataset.deleteId)
+        );
+      });
+    });
+    el.tableBody.querySelectorAll("[data-edit-id]").forEach((btn) => {
+      btn.addEventListener("click", () => startEditTransaction(btn.dataset.editId));
     });
   }
 
+  // [MỚI] Điều hướng phân trang
+  el.prevPageBtn.addEventListener("click", () => {
+    if (currentPage > 1) {
+      currentPage--;
+      renderTable();
+    }
+  });
+  el.nextPageBtn.addEventListener("click", () => {
+    const totalPages = Math.max(1, Math.ceil(getFilteredTransactions().length / PAGE_SIZE));
+    if (currentPage < totalPages) {
+      currentPage++;
+      renderTable();
+    }
+  });
+
   /* ====================================================================
      TỔNG QUAN TÀI CHÍNH
+     (Giữ nguyên: luôn phản ánh TOÀN BỘ giao dịch, không theo bộ lọc,
+     vì đây là số dư thực tế của người dùng.)
      ==================================================================== */
   function renderSummary() {
     const totalIncome = transactions.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
@@ -370,6 +589,8 @@
 
   /* ====================================================================
      BIỂU ĐỒ (Chart.js)
+     [SỬA LỖI] Cả 2 biểu đồ giờ dùng getFilteredTransactions() thay vì
+     mảng transactions gốc, để phản ánh đúng bộ lọc người dùng đang áp dụng.
      ==================================================================== */
   function getThemeColor(varName) {
     return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
@@ -378,7 +599,7 @@
   const PALETTE = ["#AE4128", "#AD8524", "#2F6F4E", "#5C7A99", "#8A5A44", "#6B6F3B", "#9C6B9E", "#4E8B8B"];
 
   function renderPieChart() {
-    const expenses = transactions.filter((t) => t.type === "expense");
+    const expenses = getFilteredTransactions().filter((t) => t.type === "expense"); // [SỬA LỖI] dùng dữ liệu đã lọc
     const byCategory = {};
     expenses.forEach((t) => {
       byCategory[t.category] = (byCategory[t.category] || 0) + t.amount;
@@ -421,18 +642,51 @@
     });
   }
 
+  // [MỚI] Sinh danh sách các tháng "YYYY-MM" liên tục từ startMonth đến
+  // endMonth (bao gồm cả 2 đầu mút), giúp biểu đồ cột không bị "nhảy cóc"
+  // khi có tháng không phát sinh giao dịch nào ở giữa khoảng thời gian.
+  function enumerateMonthRange(startMonth, endMonth) {
+    const months = [];
+    let [y, m] = startMonth.split("-").map(Number);
+    const [endY, endM] = endMonth.split("-").map(Number);
+
+    // Giới hạn an toàn để tránh vòng lặp vô hạn nếu dữ liệu ngày bị lỗi
+    let safetyCounter = 0;
+    while ((y < endY || (y === endY && m <= endM)) && safetyCounter < 1000) {
+      months.push(`${y}-${String(m).padStart(2, "0")}`);
+      m++;
+      if (m > 12) {
+        m = 1;
+        y++;
+      }
+      safetyCounter++;
+    }
+    return months;
+  }
+
   function renderBarChart() {
-    // Nhóm theo tháng (YYYY-MM) trong 6 tháng gần nhất có dữ liệu
+    const filtered = getFilteredTransactions(); // [SỬA LỖI] dùng dữ liệu đã lọc
+
+    // Gom số liệu theo tháng (YYYY-MM)
     const byMonth = {}; // { "2026-09": { income, expense } }
-    transactions.forEach((t) => {
+    filtered.forEach((t) => {
       const month = t.date.slice(0, 7);
       if (!byMonth[month]) byMonth[month] = { income: 0, expense: 0 };
       byMonth[month][t.type] += t.amount;
     });
 
-    const months = Object.keys(byMonth).sort().slice(-6);
-    const incomeData = months.map((m) => byMonth[m].income);
-    const expenseData = months.map((m) => byMonth[m].expense);
+    // [SỬA LỖI/NÂNG CẤP] Sắp xếp mốc tháng theo trình tự thời gian thật
+    // (không chỉ sắp xếp chuỗi các tháng CÓ dữ liệu, mà lấp đầy các tháng
+    // trống ở giữa bằng giá trị 0), sau đó chỉ lấy 6 tháng gần nhất.
+    const monthKeys = Object.keys(byMonth).sort();
+    let months = [];
+    if (monthKeys.length > 0) {
+      months = enumerateMonthRange(monthKeys[0], monthKeys[monthKeys.length - 1]);
+    }
+    months = months.slice(-6);
+
+    const incomeData = months.map((m) => (byMonth[m] ? byMonth[m].income : 0));
+    const expenseData = months.map((m) => (byMonth[m] ? byMonth[m].expense : 0));
     const labels = months.map((m) => {
       const [y, mo] = m.split("-");
       return `Th${parseInt(mo, 10)}/${y.slice(2)}`;
@@ -473,6 +727,8 @@
 
   /* ====================================================================
      XUẤT CSV
+     (Xuất toàn bộ giao dịch, không giới hạn theo trang/bộ lọc, để người
+     dùng luôn có bản sao lưu đầy đủ.)
      ==================================================================== */
   el.exportCsvBtn.addEventListener("click", () => {
     if (transactions.length === 0) {

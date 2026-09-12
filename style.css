@@ -29,6 +29,8 @@
   --radius-sm: 3px;
   --radius-md: 6px;
   --shadow-none: none;
+  /* [MỚI] Bóng đổ riêng cho modal — nơi duy nhất cần "nổi" trên nền trang */
+  --shadow-modal: 0 12px 32px rgba(0,0,0,0.22);
 }
 
 [data-theme="dark"]{
@@ -45,6 +47,8 @@
   --expense-soft: #35241F;
   --gold: #D9B25C;
   --gold-soft: #33301E;
+
+  --shadow-modal: 0 12px 32px rgba(0,0,0,0.5);
 }
 
 *{ box-sizing: border-box; }
@@ -167,6 +171,17 @@ button, input, select{ font-family: inherit; font-size: inherit; color: inherit;
   margin: 0 0 16px;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+/* [MỚI] Nhãn phụ nhỏ cạnh tiêu đề biểu đồ, báo hiệu dữ liệu đang theo bộ lọc */
+.panel-sub{
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink-soft);
 }
 
 /* ===================== FORM ===================== */
@@ -201,6 +216,15 @@ input:focus, select:focus{
   border-color: var(--gold);
 }
 
+/* [MỚI] Ô nhập số tiền dùng font mono, canh phải — cùng ngôn ngữ thị giác
+   với số tiền hiển thị trong bảng/biểu đồ, giúp dễ đọc dấu phân cách hàng nghìn */
+#amountInput{
+  font-family: var(--font-mono);
+  font-weight: 600;
+  text-align: right;
+  letter-spacing: 0.2px;
+}
+
 .field-row-end{ justify-content: flex-end; align-items:center; margin-bottom:0; }
 
 .btn{
@@ -214,10 +238,18 @@ input:focus, select:focus{
 .btn-primary:hover{ background: var(--ink-soft); }
 .btn-outline{ background: transparent; border-color: var(--line-strong); color: var(--ink); }
 .btn-outline:hover{ border-color: var(--ink); }
+.btn-outline:disabled{ opacity: 0.4; cursor: not-allowed; }
 .btn-text{ background:transparent; border:none; color: var(--ink-soft); text-decoration: underline; padding: 9px 4px; }
 .btn-text:hover{ color: var(--ink); }
 .btn-sm{ padding: 6px 10px; font-size: 13px; }
-.btn-danger-text{ background:none; border:none; color: var(--expense); cursor:pointer; font-size:13px; text-decoration: underline; }
+/* [MỚI] Nút "Xóa" trong bảng giao dịch — giữ nguyên phong cách cũ */
+.btn-danger-text{ background:none; border:none; color: var(--expense); cursor:pointer; font-size:13px; text-decoration: underline; padding: 0; }
+/* [MỚI] Nút "Sửa" trong bảng giao dịch — dùng màu mực để phân biệt với Xóa */
+.btn-link-text{ background:none; border:none; color: var(--ink-soft); cursor:pointer; font-size:13px; text-decoration: underline; padding: 0; }
+.btn-link-text:hover{ color: var(--ink); }
+/* [MỚI] Nút xác nhận xóa trong modal — màu cảnh báo, nền đặc để tách biệt hành động phá hủy */
+.btn-danger{ background: var(--expense); color: #fff; border-color: var(--expense); }
+.btn-danger:hover{ opacity: 0.9; }
 
 /* ===================== QUẢN LÝ DANH MỤC ===================== */
 .category-manager{ display:grid; grid-template-columns: 1fr 1fr; gap: 20px; }
@@ -258,7 +290,8 @@ input:focus, select:focus{
 .ledger-table tbody tr:hover{ background: var(--paper); }
 
 .col-amount{ text-align:right; }
-.col-action{ width: 40px; }
+/* [CẬP NHẬT] Rộng hơn để chứa cả 2 nút Sửa/Xóa */
+.col-action{ width: 96px; }
 
 .amount-cell{ font-family: var(--font-mono); font-weight:600; text-align:right; white-space:nowrap; }
 .amount-income{ color: var(--income); }
@@ -275,6 +308,9 @@ input:focus, select:focus{
 
 .note-cell{ color: var(--ink-soft); }
 
+/* [MỚI] Nhóm 2 nút hành động trên mỗi dòng giao dịch */
+.row-actions{ display:flex; gap:10px; justify-content:flex-end; white-space:nowrap; }
+
 .empty-state{
   text-align:center;
   color: var(--ink-soft);
@@ -282,8 +318,56 @@ input:focus, select:focus{
   font-size: 14px;
 }
 
+/* ===================== [MỚI] PHÂN TRANG ===================== */
+.pagination{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap: 16px;
+  padding-top: 16px;
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.page-indicator{
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
 /* ===================== BIỂU ĐỒ ===================== */
 .chart-box{ position:relative; height: 240px; }
+
+/* ===================== [MỚI] MODAL XÁC NHẬN ===================== */
+.modal-overlay{
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 20, 19, 0.45);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding: 20px;
+  z-index: 100;
+}
+.modal-box{
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-modal);
+  padding: 24px;
+  max-width: 380px;
+  width: 100%;
+}
+.modal-box h3{
+  font-family: var(--font-display);
+  font-size: 18px;
+  margin: 0 0 10px;
+}
+.modal-box p{
+  color: var(--ink-soft);
+  font-size: 14px;
+  margin: 0 0 20px;
+}
+.modal-actions{ display:flex; justify-content:flex-end; gap:10px; }
 
 /* ===================== FOOTER ===================== */
 .app-footer{
@@ -308,4 +392,5 @@ input:focus, select:focus{
   .category-manager{ grid-template-columns: 1fr; }
   .field-row{ flex-direction: column; }
   .field-row-end{ flex-direction: row; }
+  .modal-box{ padding: 20px; }
 }
