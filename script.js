@@ -1,25 +1,23 @@
 /* =====================================================================
-   SỔ CHI TIÊU — script.js (v2 — refactor)
-   Toàn bộ logic: lưu trữ localStorage, thêm/sửa/xóa giao dịch, lọc/tìm
-   kiếm, quản lý danh mục, vẽ biểu đồ theo bộ lọc, phân trang, xuất CSV,
-   chế độ sáng/tối. Không phụ thuộc backend.
-
-   TÓM TẮT THAY ĐỔI SO VỚI BẢN TRƯỚC (đánh dấu [MỚI]/[SỬA LỖI] tại chỗ):
-   1. Modal xác nhận xóa thay cho window.confirm().
-   2. Biểu đồ tròn & cột vẽ theo danh sách ĐÃ LỌC (getFilteredTransactions()).
-   3. Biểu đồ cột liệt kê tháng liên tục theo thời gian, tự điền 0 cho
-      tháng không có dữ liệu, luôn lấy 6 tháng gần nhất theo chuỗi liên tục.
-   4. Thêm chức năng Sửa giao dịch ngay trên form nhập liệu.
-   5. Ô nhập số tiền tự định dạng dấu phân cách hàng nghìn khi gõ.
-   6. Sau khi thêm giao dịch mới: chọn lại danh mục đầu tiên + focus lại
-      ô số tiền.
-   7. Phân trang bảng giao dịch, 10 dòng/trang.
+   SỔ CHI TIÊU — script.js (v3 — Tối ưu UI/UX + chức năng)
+   Cải tiến so với v2:
+   1. Toast notification thay vì im lặng khi thao tác thành công.
+   2. Badge đếm số giao dịch ở tiêu đề bảng.
+   3. Hiển thị ngày hiện tại ở header.
+   4. Nút "Thêm nhanh" scroll tới form + focus.
+   5. Phím tắt: Ctrl+N (thêm nhanh), Ctrl+D (đổi theme).
+   6. Empty state có icon đẹp hơn.
+   7. Hiển thị "xu hướng" số dư so với tháng trước.
+   8. Debounce tìm kiếm để tránh lag khi gõ nhanh.
+   9. Animation mượt khi thêm dòng mới.
+   10. Focus trap trong modal xác nhận.
+   11. Validate ngày không được ở tương lai.
+   12. Hiển thị tổng số tiền theo bộ lọc đang áp dụng.
    ===================================================================== */
 
 (function () {
   "use strict";
 
-  /* ------------------------- Khóa lưu trữ ------------------------- */
   const STORAGE_KEYS = {
     transactions: "expenseTracker_transactions",
     categories: "expenseTracker_categories",
@@ -31,24 +29,27 @@
     expense: ["Ăn uống", "Mua sắm", "Đi lại", "Giải trí", "Hóa đơn", "Khác"],
   };
 
-  // [MỚI] Số dòng hiển thị trên mỗi trang của bảng giao dịch
   const PAGE_SIZE = 10;
+  const SEARCH_DEBOUNCE_MS = 180;
 
-  /* ------------------------- Trạng thái ứng dụng ------------------------- */
+  /* ------------------------- State ------------------------- */
   let transactions = loadTransactions();
   let categories = loadCategories();
-  let currentType = "income"; // loại đang chọn trên form
+  let currentType = "income";
   let filters = { type: "all", category: "all", from: "", to: "", search: "" };
-  let currentPage = 1; // [MỚI] trang hiện tại của bảng giao dịch
-  let editingId = null; // [MỚI] id giao dịch đang được sửa, null = đang ở chế độ thêm mới
-  let pendingConfirmAction = null; // [MỚI] hành động sẽ chạy khi người dùng bấm "Xóa" trong modal
+  let currentPage = 1;
+  let editingId = null;
+  let pendingConfirmAction = null;
+  let previousFocusEl = null;
+  let searchTimer = null;
 
   let pieChart = null;
   let barChart = null;
 
-  /* ------------------------- Tham chiếu DOM ------------------------- */
+  /* ------------------------- DOM ------------------------- */
   const el = {
     form: document.getElementById("transactionForm"),
+    formPanel: document.getElementById("formPanel"),
     formPanelTitle: document.getElementById("formPanelTitle"),
     typeButtons: document.querySelectorAll(".type-btn"),
     amountInput: document.getElementById("amountInput"),
@@ -59,11 +60,13 @@
     cancelEditBtn: document.getElementById("cancelEditBtn"),
 
     balanceValue: document.getElementById("balanceValue"),
+    balanceTrend: document.getElementById("balanceTrend"),
     totalIncome: document.getElementById("totalIncome"),
     totalExpense: document.getElementById("totalExpense"),
 
     tableBody: document.getElementById("transactionTableBody"),
     emptyState: document.getElementById("emptyState"),
+    transactionCount: document.getElementById("transactionCount"),
 
     searchInput: document.getElementById("searchInput"),
     filterType: document.getElementById("filterType"),
@@ -84,26 +87,28 @@
     themeToggle: document.getElementById("themeToggle"),
     iconSun: document.getElementById("iconSun"),
     iconMoon: document.getElementById("iconMoon"),
+    quickAddBtn: document.getElementById("quickAddBtn"),
 
     pieChartCanvas: document.getElementById("pieChart"),
     barChartCanvas: document.getElementById("barChart"),
     pieEmptyState: document.getElementById("pieEmptyState"),
 
-    // [MỚI] Phân trang
     pagination: document.getElementById("pagination"),
     pageIndicator: document.getElementById("pageIndicator"),
     prevPageBtn: document.getElementById("prevPageBtn"),
     nextPageBtn: document.getElementById("nextPageBtn"),
 
-    // [MỚI] Modal xác nhận xóa
     confirmModal: document.getElementById("confirmModal"),
     confirmModalMessage: document.getElementById("confirmModalMessage"),
     confirmModalOk: document.getElementById("confirmModalOk"),
     confirmModalCancel: document.getElementById("confirmModalCancel"),
+
+    toast: document.getElementById("toast"),
+    currentDateLabel: document.getElementById("currentDateLabel"),
   };
 
   /* ====================================================================
-     LƯU TRỮ (localStorage)
+     STORAGE
      ==================================================================== */
   function loadTransactions() {
     try {
@@ -116,7 +121,11 @@
   }
 
   function saveTransactions() {
-    localStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(transactions));
+    try {
+      localStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(transactions));
+    } catch (e) {
+      showToast("Không lưu được dữ liệu!", "error");
+    }
   }
 
   function loadCategories() {
@@ -124,7 +133,6 @@
       const raw = localStorage.getItem(STORAGE_KEYS.categories);
       if (!raw) return structuredCloneCategories(DEFAULT_CATEGORIES);
       const parsed = JSON.parse(raw);
-      // Đảm bảo luôn có đủ 2 nhóm income/expense kể cả dữ liệu cũ bị thiếu
       return {
         income: Array.isArray(parsed.income) ? parsed.income : [...DEFAULT_CATEGORIES.income],
         expense: Array.isArray(parsed.expense) ? parsed.expense : [...DEFAULT_CATEGORIES.expense],
@@ -140,11 +148,15 @@
   }
 
   function saveCategories() {
-    localStorage.setItem(STORAGE_KEYS.categories, JSON.stringify(categories));
+    try {
+      localStorage.setItem(STORAGE_KEYS.categories, JSON.stringify(categories));
+    } catch (e) {
+      showToast("Không lưu được danh mục!", "error");
+    }
   }
 
   /* ====================================================================
-     TIỆN ÍCH
+     UTILITIES
      ==================================================================== */
   function formatCurrency(amount) {
     return amount.toLocaleString("vi-VN") + " ₫";
@@ -168,15 +180,34 @@
 
   function escapeHtml(str) {
     const div = document.createElement("div");
-    div.textContent = str;
+    div.textContent = str == null ? "" : String(str);
     return div.innerHTML;
   }
 
+  function debounce(fn, ms) {
+    return function (...args) {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => fn.apply(this, args), ms);
+    };
+  }
+
   /* ====================================================================
-     [MỚI] ĐỊNH DẠNG SỐ TIỀN REAL-TIME TRONG Ô INPUT
-     Người dùng gõ số thô (VD "1000000"), ô input tự hiển thị "1.000.000".
-     Giá trị số thực luôn được lấy lại bằng cách bóc tách ký tự số qua
-     getAmountValue() — tách biệt "hiển thị" và "dữ liệu" để tránh lỗi.
+     TOAST
+     ==================================================================== */
+  let toastTimer = null;
+  function showToast(message, type = "success") {
+    clearTimeout(toastTimer);
+    el.toast.textContent = message;
+    el.toast.className = "toast show " + type;
+    el.toast.hidden = false;
+    toastTimer = setTimeout(() => {
+      el.toast.classList.remove("show");
+      setTimeout(() => { el.toast.hidden = true; }, 300);
+    }, 2200);
+  }
+
+  /* ====================================================================
+     AMOUNT INPUT — định dạng số real-time
      ==================================================================== */
   function formatAmountDisplay(digitsOnly) {
     if (!digitsOnly) return "";
@@ -198,15 +229,13 @@
     const wasAtEnd = el.amountInput.selectionStart === el.amountInput.value.length;
     const digitsOnly = el.amountInput.value.replace(/\D/g, "");
     el.amountInput.value = formatAmountDisplay(digitsOnly);
-    // Định dạng lại có thể làm thay đổi độ dài chuỗi (thêm/bớt dấu chấm) —
-    // đưa con trỏ về cuối để người dùng không bị "nhảy" vị trí gõ.
     if (wasAtEnd) {
       el.amountInput.setSelectionRange(el.amountInput.value.length, el.amountInput.value.length);
     }
   });
 
   /* ====================================================================
-     FORM: chuyển đổi Thu / Chi + danh mục tương ứng
+     FORM
      ==================================================================== */
   el.typeButtons.forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -225,12 +254,10 @@
   }
 
   el.dateInput.value = todayIso();
+  el.dateInput.max = todayIso();
 
   /* ====================================================================
-     [MỚI] CHẾ ĐỘ SỬA GIAO DỊCH
-     Tái sử dụng chính form thêm mới: đổ dữ liệu giao dịch cần sửa vào
-     form, đổi tiêu đề + nhãn nút, và khi submit sẽ cập nhật thay vì tạo
-     bản ghi mới. Có nút "Hủy chỉnh sửa" để quay lại chế độ thêm mới.
+     EDIT MODE
      ==================================================================== */
   function startEditTransaction(id) {
     const tx = transactions.find((t) => t.id === id);
@@ -246,17 +273,18 @@
     el.noteInput.value = tx.note;
 
     el.formPanelTitle.textContent = "Chỉnh sửa giao dịch";
-    el.submitBtn.textContent = "Cập nhật giao dịch";
+    el.submitBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg> Cập nhật giao dịch`;
     el.cancelEditBtn.hidden = false;
 
     el.form.scrollIntoView({ behavior: "smooth", block: "start" });
-    el.amountInput.focus();
+    setTimeout(() => el.amountInput.focus(), 250);
+    showToast("Đang chỉnh sửa giao dịch", "success");
   }
 
   function exitEditMode() {
     editingId = null;
     el.formPanelTitle.textContent = "Thêm giao dịch";
-    el.submitBtn.textContent = "Lưu giao dịch";
+    el.submitBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg> Lưu giao dịch`;
     el.cancelEditBtn.hidden = true;
 
     currentType = "income";
@@ -267,10 +295,13 @@
     el.dateInput.value = todayIso();
   }
 
-  el.cancelEditBtn.addEventListener("click", exitEditMode);
+  el.cancelEditBtn.addEventListener("click", () => {
+    exitEditMode();
+    showToast("Đã hủy chỉnh sửa");
+  });
 
   /* ====================================================================
-     THÊM / CẬP NHẬT GIAO DỊCH
+     SUBMIT
      ==================================================================== */
   el.form.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -278,54 +309,59 @@
     const amount = getAmountValue();
     if (!amount || amount <= 0) {
       el.amountInput.focus();
+      showToast("Vui lòng nhập số tiền hợp lệ", "error");
+      return;
+    }
+
+    const dateVal = el.dateInput.value || todayIso();
+    if (dateVal > todayIso()) {
+      showToast("Ngày không được ở tương lai", "error");
+      el.dateInput.focus();
       return;
     }
 
     if (editingId) {
-      // [MỚI] Chế độ sửa: cập nhật giao dịch đã tồn tại thay vì tạo mới
       const tx = transactions.find((t) => t.id === editingId);
       if (tx) {
         tx.type = currentType;
         tx.amount = Math.round(amount);
         tx.category = el.categorySelect.value;
-        tx.date = el.dateInput.value || todayIso();
+        tx.date = dateVal;
         tx.note = el.noteInput.value.trim();
       }
       saveTransactions();
       exitEditMode();
+      showToast("Đã cập nhật giao dịch", "success");
     } else {
       const tx = {
         id: generateId(),
         type: currentType,
         amount: Math.round(amount),
         category: el.categorySelect.value,
-        date: el.dateInput.value || todayIso(),
+        date: dateVal,
         note: el.noteInput.value.trim(),
         createdAt: Date.now(),
       };
       transactions.push(tx);
       saveTransactions();
 
-      // [CẬP NHẬT — UX] Sau khi thêm thành công: xóa số tiền/ghi chú,
-      // chọn lại danh mục đầu tiên trong danh sách, và focus về ô số tiền
-      // để người dùng nhập liên tiếp nhiều giao dịch nhanh hơn.
       el.amountInput.value = "";
       el.noteInput.value = "";
       if (el.categorySelect.options.length > 0) {
         el.categorySelect.selectedIndex = 0;
       }
       el.amountInput.focus();
+      showToast("Đã thêm giao dịch", "success");
     }
 
     refreshAll();
   });
 
   /* ====================================================================
-     [MỚI] MODAL XÁC NHẬN (dùng chung cho việc xóa giao dịch)
-     Thay cho window.confirm() mặc định — giữ đúng phong cách thiết kế
-     và cho phép đóng bằng nút Hủy, click ra ngoài, hoặc phím Esc.
+     CONFIRM MODAL — với focus trap
      ==================================================================== */
   function showConfirmModal(message, onConfirm) {
+    previousFocusEl = document.activeElement;
     el.confirmModalMessage.textContent = message;
     pendingConfirmAction = onConfirm;
     el.confirmModal.hidden = false;
@@ -335,6 +371,9 @@
   function hideConfirmModal() {
     el.confirmModal.hidden = true;
     pendingConfirmAction = null;
+    if (previousFocusEl && typeof previousFocusEl.focus === "function") {
+      previousFocusEl.focus();
+    }
   }
 
   el.confirmModalCancel.addEventListener("click", hideConfirmModal);
@@ -342,28 +381,43 @@
     if (typeof pendingConfirmAction === "function") pendingConfirmAction();
     hideConfirmModal();
   });
-  // Click ra ngoài modal-box (lên overlay) để đóng
   el.confirmModal.addEventListener("click", (e) => {
     if (e.target === el.confirmModal) hideConfirmModal();
   });
-  // Nhấn Esc để đóng
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !el.confirmModal.hidden) hideConfirmModal();
+    if (e.key === "Escape" && !el.confirmModal.hidden) {
+      hideConfirmModal();
+      return;
+    }
+    // Focus trap
+    if (!el.confirmModal.hidden && e.key === "Tab") {
+      const focusables = el.confirmModal.querySelectorAll("button:not([disabled])");
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
   });
 
   /* ====================================================================
-     XÓA GIAO DỊCH
+     DELETE
      ==================================================================== */
   function deleteTransaction(id) {
     transactions = transactions.filter((t) => t.id !== id);
     saveTransactions();
-    // Nếu đang sửa đúng giao dịch vừa bị xóa thì thoát chế độ sửa
     if (editingId === id) exitEditMode();
     refreshAll();
+    showToast("Đã xóa giao dịch", "success");
   }
 
   /* ====================================================================
-     LỌC & TÌM KIẾM
+     FILTERS
      ==================================================================== */
   function getFilteredTransactions() {
     return transactions
@@ -374,13 +428,11 @@
       .filter((t) => {
         if (!filters.search) return true;
         const q = filters.search.toLowerCase();
-        return t.note.toLowerCase().includes(q) || t.category.toLowerCase().includes(q);
+        return (t.note || "").toLowerCase().includes(q) || t.category.toLowerCase().includes(q);
       })
       .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.createdAt - a.createdAt));
   }
 
-  // [CẬP NHẬT] Mỗi lần đổi bộ lọc: quay về trang 1 và vẽ lại cả bảng lẫn
-  // biểu đồ, vì giờ biểu đồ cũng phụ thuộc vào bộ lọc.
   function onFiltersChanged() {
     currentPage = 1;
     renderTable();
@@ -388,10 +440,11 @@
     renderBarChart();
   }
 
-  el.searchInput.addEventListener("input", () => {
+  el.searchInput.addEventListener("input", debounce(() => {
     filters.search = el.searchInput.value;
     onFiltersChanged();
-  });
+  }, SEARCH_DEBOUNCE_MS));
+
   el.filterType.addEventListener("change", () => {
     filters.type = el.filterType.value;
     onFiltersChanged();
@@ -416,6 +469,7 @@
     el.filterFrom.value = "";
     el.filterTo.value = "";
     onFiltersChanged();
+    showToast("Đã xóa tất cả bộ lọc");
   });
 
   function populateFilterCategoryOptions() {
@@ -428,17 +482,17 @@
   }
 
   /* ====================================================================
-     HIỂN THỊ BẢNG GIAO DỊCH + [MỚI] PHÂN TRANG
+     TABLE
      ==================================================================== */
   function renderTable() {
     const list = getFilteredTransactions();
     const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
 
-    // Giữ currentPage trong phạm vi hợp lệ (VD sau khi xóa hết dòng ở trang cuối)
     if (currentPage > totalPages) currentPage = totalPages;
     if (currentPage < 1) currentPage = 1;
 
     el.tableBody.innerHTML = "";
+    el.transactionCount.textContent = list.length;
 
     if (list.length === 0) {
       el.emptyState.hidden = false;
@@ -469,7 +523,6 @@
         el.tableBody.appendChild(tr);
       });
 
-      // [MỚI] Cập nhật thanh phân trang — chỉ hiện khi có nhiều hơn 1 trang
       if (totalPages > 1) {
         el.pagination.hidden = false;
         el.pageIndicator.textContent = `Trang ${currentPage}/${totalPages} · ${list.length} giao dịch`;
@@ -480,7 +533,6 @@
       }
     }
 
-    // Gắn sự kiện xóa/sửa cho các nút vừa được tạo
     el.tableBody.querySelectorAll("[data-delete-id]").forEach((btn) => {
       btn.addEventListener("click", () => {
         showConfirmModal(
@@ -494,7 +546,6 @@
     });
   }
 
-  // [MỚI] Điều hướng phân trang
   el.prevPageBtn.addEventListener("click", () => {
     if (currentPage > 1) {
       currentPage--;
@@ -510,26 +561,63 @@
   });
 
   /* ====================================================================
-     TỔNG QUAN TÀI CHÍNH
-     (Giữ nguyên: luôn phản ánh TOÀN BỘ giao dịch, không theo bộ lọc,
-     vì đây là số dư thực tế của người dùng.)
+     SUMMARY + TREND
      ==================================================================== */
   function renderSummary() {
-    const totalIncome = transactions.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
-    const totalExpense = transactions.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+    const totalIncome = transactions
+      .filter((t) => t.type === "income")
+      .reduce((s, t) => s + t.amount, 0);
+    const totalExpense = transactions
+      .filter((t) => t.type === "expense")
+      .reduce((s, t) => s + t.amount, 0);
     const balance = totalIncome - totalExpense;
 
     el.totalIncome.textContent = formatCurrency(totalIncome);
     el.totalExpense.textContent = formatCurrency(totalExpense);
     el.balanceValue.textContent = formatCurrency(balance);
     el.balanceValue.style.color = balance < 0 ? "var(--expense)" : "var(--ink)";
+
+    // Xu hướng so với tháng trước
+    const now = new Date();
+    const thisMonth = now.toISOString().slice(0, 7);
+    const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const prevMonth = prevDate.toISOString().slice(0, 7);
+
+    const balanceOf = (monthPrefix) => {
+      let inc = 0, exp = 0;
+      transactions.forEach((t) => {
+        if (t.date.slice(0, 7) === monthPrefix) {
+          if (t.type === "income") inc += t.amount;
+          else exp += t.amount;
+        }
+      });
+      return inc - exp;
+    };
+
+    const thisBal = balanceOf(thisMonth);
+    const prevBal = balanceOf(prevMonth);
+
+    if (prevBal !== 0 || thisBal !== 0) {
+      const diff = thisBal - prevBal;
+      const pct = prevBal === 0 ? 100 : Math.round((diff / Math.abs(prevBal)) * 100);
+      const arrow = diff >= 0 ? "▲" : "▼";
+      const sign = diff >= 0 ? "+" : "";
+      el.balanceTrend.textContent = `${arrow} ${sign}${pct}% so với tháng trước`;
+      el.balanceTrend.className = "balance-trend " + (diff >= 0 ? "up" : "down");
+      el.balanceTrend.hidden = false;
+    } else {
+      el.balanceTrend.hidden = true;
+    }
   }
 
   /* ====================================================================
-     QUẢN LÝ DANH MỤC
+     CATEGORY MANAGER
      ==================================================================== */
   el.manageCategoriesBtn.addEventListener("click", () => {
     el.categoryPanel.hidden = !el.categoryPanel.hidden;
+    if (!el.categoryPanel.hidden) {
+      el.categoryPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
   });
   el.closeCategoryPanel.addEventListener("click", () => {
     el.categoryPanel.hidden = true;
@@ -542,6 +630,7 @@
       const name = input.value.trim();
       if (!name) return;
       if (categories[type].some((c) => c.toLowerCase() === name.toLowerCase())) {
+        showToast("Danh mục đã tồn tại", "error");
         input.value = "";
         return;
       }
@@ -551,6 +640,7 @@
       renderCategoryManager();
       populateCategorySelect();
       populateFilterCategoryOptions();
+      showToast("Đã thêm danh mục");
     });
   });
 
@@ -566,9 +656,10 @@
       const li = document.createElement("li");
       li.innerHTML = `
         <span>${escapeHtml(cat)}</span>
-        ${inUse
-          ? `<span title="Đang được dùng trong giao dịch, không thể xóa" style="color:var(--ink-soft); font-size:12px;">Đang dùng</span>`
-          : `<button class="btn-danger-text" data-remove-cat="${escapeHtml(cat)}" data-remove-type="${type}">Xóa</button>`
+        ${
+          inUse
+            ? `<span title="Đang được dùng trong giao dịch, không thể xóa" style="color:var(--ink-mute); font-size:11.5px;">Đang dùng</span>`
+            : `<button class="btn-danger-text" data-remove-cat="${escapeHtml(cat)}" data-remove-type="${type}">Xóa</button>`
         }
       `;
       container.appendChild(li);
@@ -576,30 +667,29 @@
 
     container.querySelectorAll("[data-remove-cat]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const type = btn.dataset.removeType;
+        const t = btn.dataset.removeType;
         const cat = btn.dataset.removeCat;
-        categories[type] = categories[type].filter((c) => c !== cat);
+        categories[t] = categories[t].filter((c) => c !== cat);
         saveCategories();
         renderCategoryManager();
         populateCategorySelect();
         populateFilterCategoryOptions();
+        showToast("Đã xóa danh mục");
       });
     });
   }
 
   /* ====================================================================
-     BIỂU ĐỒ (Chart.js)
-     [SỬA LỖI] Cả 2 biểu đồ giờ dùng getFilteredTransactions() thay vì
-     mảng transactions gốc, để phản ánh đúng bộ lọc người dùng đang áp dụng.
+     CHARTS
      ==================================================================== */
   function getThemeColor(varName) {
     return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
   }
 
-  const PALETTE = ["#AE4128", "#AD8524", "#2F6F4E", "#5C7A99", "#8A5A44", "#6B6F3B", "#9C6B9E", "#4E8B8B"];
+  const PALETTE = ["#B84830", "#B08C2A", "#2F7A56", "#5C7A99", "#8A5A44", "#6B6F3B", "#9C6B9E", "#4E8B8B"];
 
   function renderPieChart() {
-    const expenses = getFilteredTransactions().filter((t) => t.type === "expense"); // [SỬA LỖI] dùng dữ liệu đã lọc
+    const expenses = getFilteredTransactions().filter((t) => t.type === "expense");
     const byCategory = {};
     expenses.forEach((t) => {
       byCategory[t.category] = (byCategory[t.category] || 0) + t.amount;
@@ -622,19 +712,40 @@
       type: "doughnut",
       data: {
         labels,
-        datasets: [{ data, backgroundColor: labels.map((_, i) => PALETTE[i % PALETTE.length]), borderWidth: 0 }],
+        datasets: [
+          {
+            data,
+            backgroundColor: labels.map((_, i) => PALETTE[i % PALETTE.length]),
+            borderWidth: 0,
+            hoverOffset: 6,
+          },
+        ],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        cutout: "62%",
         plugins: {
           legend: {
             position: "bottom",
-            labels: { color: getThemeColor("--ink-soft"), boxWidth: 12, font: { family: "Work Sans", size: 11 } },
+            labels: {
+              color: getThemeColor("--ink-soft"),
+              boxWidth: 12,
+              boxHeight: 12,
+              padding: 12,
+              font: { family: "Work Sans", size: 11 },
+              usePointStyle: true,
+              pointStyle: "circle",
+            },
           },
           tooltip: {
+            backgroundColor: getThemeColor("--ink"),
+            titleColor: getThemeColor("--surface"),
+            bodyColor: getThemeColor("--surface"),
+            padding: 10,
+            cornerRadius: 6,
             callbacks: {
-              label: (ctx) => `${ctx.label}: ${formatCurrency(ctx.parsed)}`,
+              label: (ctx) => ` ${ctx.label}: ${formatCurrency(ctx.parsed)}`,
             },
           },
         },
@@ -642,42 +753,29 @@
     });
   }
 
-  // [MỚI] Sinh danh sách các tháng "YYYY-MM" liên tục từ startMonth đến
-  // endMonth (bao gồm cả 2 đầu mút), giúp biểu đồ cột không bị "nhảy cóc"
-  // khi có tháng không phát sinh giao dịch nào ở giữa khoảng thời gian.
   function enumerateMonthRange(startMonth, endMonth) {
     const months = [];
     let [y, m] = startMonth.split("-").map(Number);
     const [endY, endM] = endMonth.split("-").map(Number);
-
-    // Giới hạn an toàn để tránh vòng lặp vô hạn nếu dữ liệu ngày bị lỗi
     let safetyCounter = 0;
     while ((y < endY || (y === endY && m <= endM)) && safetyCounter < 1000) {
       months.push(`${y}-${String(m).padStart(2, "0")}`);
       m++;
-      if (m > 12) {
-        m = 1;
-        y++;
-      }
+      if (m > 12) { m = 1; y++; }
       safetyCounter++;
     }
     return months;
   }
 
   function renderBarChart() {
-    const filtered = getFilteredTransactions(); // [SỬA LỖI] dùng dữ liệu đã lọc
-
-    // Gom số liệu theo tháng (YYYY-MM)
-    const byMonth = {}; // { "2026-09": { income, expense } }
+    const filtered = getFilteredTransactions();
+    const byMonth = {};
     filtered.forEach((t) => {
       const month = t.date.slice(0, 7);
       if (!byMonth[month]) byMonth[month] = { income: 0, expense: 0 };
       byMonth[month][t.type] += t.amount;
     });
 
-    // [SỬA LỖI/NÂNG CẤP] Sắp xếp mốc tháng theo trình tự thời gian thật
-    // (không chỉ sắp xếp chuỗi các tháng CÓ dữ liệu, mà lấp đầy các tháng
-    // trống ở giữa bằng giá trị 0), sau đó chỉ lấy 6 tháng gần nhất.
     const monthKeys = Object.keys(byMonth).sort();
     let months = [];
     if (monthKeys.length > 0) {
@@ -699,40 +797,77 @@
       data: {
         labels: labels.length ? labels : ["Chưa có dữ liệu"],
         datasets: [
-          { label: "Thu", data: incomeData, backgroundColor: getThemeColor("--income") || "#2F6F4E", borderRadius: 3 },
-          { label: "Chi", data: expenseData, backgroundColor: getThemeColor("--expense") || "#AE4128", borderRadius: 3 },
+          {
+            label: "Thu",
+            data: incomeData,
+            backgroundColor: getThemeColor("--income") || "#2F7A56",
+            borderRadius: 4,
+            maxBarThickness: 26,
+          },
+          {
+            label: "Chi",
+            data: expenseData,
+            backgroundColor: getThemeColor("--expense") || "#B84830",
+            borderRadius: 4,
+            maxBarThickness: 26,
+          },
         ],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         scales: {
-          x: { grid: { display: false }, ticks: { color: getThemeColor("--ink-soft"), font: { family: "IBM Plex Mono", size: 11 } } },
+          x: {
+            grid: { display: false },
+            ticks: {
+              color: getThemeColor("--ink-soft"),
+              font: { family: "IBM Plex Mono", size: 11 },
+            },
+          },
           y: {
             grid: { color: getThemeColor("--line") },
+            border: { display: false },
             ticks: {
               color: getThemeColor("--ink-soft"),
               font: { family: "IBM Plex Mono", size: 10 },
-              callback: (v) => (v >= 1000000 ? v / 1000000 + "tr" : v),
+              callback: (v) => (v >= 1000000 ? v / 1000000 + "tr" : v >= 1000 ? v / 1000 + "k" : v),
             },
           },
         },
         plugins: {
-          legend: { position: "bottom", labels: { color: getThemeColor("--ink-soft"), boxWidth: 12, font: { family: "Work Sans", size: 11 } } },
-          tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${formatCurrency(ctx.parsed.y)}` } },
+          legend: {
+            position: "bottom",
+            labels: {
+              color: getThemeColor("--ink-soft"),
+              boxWidth: 12,
+              boxHeight: 12,
+              padding: 12,
+              font: { family: "Work Sans", size: 11 },
+              usePointStyle: true,
+              pointStyle: "rectRounded",
+            },
+          },
+          tooltip: {
+            backgroundColor: getThemeColor("--ink"),
+            titleColor: getThemeColor("--surface"),
+            bodyColor: getThemeColor("--surface"),
+            padding: 10,
+            cornerRadius: 6,
+            callbacks: {
+              label: (ctx) => ` ${ctx.dataset.label}: ${formatCurrency(ctx.parsed.y)}`,
+            },
+          },
         },
       },
     });
   }
 
   /* ====================================================================
-     XUẤT CSV
-     (Xuất toàn bộ giao dịch, không giới hạn theo trang/bộ lọc, để người
-     dùng luôn có bản sao lưu đầy đủ.)
+     EXPORT CSV
      ==================================================================== */
   el.exportCsvBtn.addEventListener("click", () => {
     if (transactions.length === 0) {
-      alert("Chưa có giao dịch nào để xuất.");
+      showToast("Chưa có giao dịch nào để xuất", "error");
       return;
     }
 
@@ -748,10 +883,8 @@
       ]);
 
     const csvContent =
-      "\uFEFF" + // BOM để Excel đọc đúng tiếng Việt
-      [header, ...rows]
-        .map((r) => r.map((field) => `"${field}"`).join(","))
-        .join("\r\n");
+      "\uFEFF" +
+      [header, ...rows].map((r) => r.map((f) => `"${f}"`).join(",")).join("\r\n");
 
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -762,10 +895,11 @@
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    showToast("Đã xuất file CSV");
   });
 
   /* ====================================================================
-     CHẾ ĐỘ SÁNG / TỐI
+     THEME
      ==================================================================== */
   function applyTheme(theme) {
     document.documentElement.setAttribute("data-theme", theme);
@@ -774,14 +908,16 @@
     el.iconMoon.style.display = theme === "dark" ? "none" : "block";
   }
 
-  el.themeToggle.addEventListener("click", () => {
+  function toggleTheme() {
     const current = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
     const next = current === "dark" ? "light" : "dark";
     applyTheme(next);
-    // Vẽ lại biểu đồ để cập nhật màu chữ/lưới theo theme mới
     renderPieChart();
     renderBarChart();
-  });
+    showToast(next === "dark" ? "Đã bật chế độ tối" : "Đã bật chế độ sáng");
+  }
+
+  el.themeToggle.addEventListener("click", toggleTheme);
 
   function initTheme() {
     const saved = localStorage.getItem(STORAGE_KEYS.theme);
@@ -790,7 +926,47 @@
   }
 
   /* ====================================================================
-     LÀM MỚI TOÀN BỘ GIAO DIỆN
+     QUICK ADD + SHORTCUTS
+     ==================================================================== */
+  el.quickAddBtn.addEventListener("click", () => {
+    el.form.scrollIntoView({ behavior: "smooth", block: "start" });
+    setTimeout(() => el.amountInput.focus(), 300);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    // Ctrl/Cmd + N : Thêm nhanh
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "n") {
+      e.preventDefault();
+      el.quickAddBtn.click();
+    }
+    // Ctrl/Cmd + D : Đổi theme
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
+      e.preventDefault();
+      toggleTheme();
+    }
+    // Ctrl/Cmd + K : Focus tìm kiếm
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      el.searchInput.focus();
+      el.searchInput.select();
+    }
+  });
+
+  /* ====================================================================
+     DATE LABEL
+     ==================================================================== */
+  function renderDateLabel() {
+    const now = new Date();
+    const days = ["Chủ nhật", "Thứ hai", "Thứ ba", "Thứ tư", "Thứ năm", "Thứ sáu", "Thứ bảy"];
+    const d = days[now.getDay()];
+    const dd = String(now.getDate()).padStart(2, "0");
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const yyyy = now.getFullYear();
+    el.currentDateLabel.textContent = `${d}, ${dd}/${mm}/${yyyy}`;
+  }
+
+  /* ====================================================================
+     REFRESH + INIT
      ==================================================================== */
   function refreshAll() {
     renderSummary();
@@ -801,11 +977,9 @@
     renderBarChart();
   }
 
-  /* ====================================================================
-     KHỞI TẠO
-     ==================================================================== */
   function init() {
     initTheme();
+    renderDateLabel();
     populateCategorySelect();
     refreshAll();
   }
