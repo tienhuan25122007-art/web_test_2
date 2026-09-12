@@ -1,18 +1,10 @@
 /* =====================================================================
-   SỔ CHI TIÊU — script.js (v3 — Tối ưu UI/UX + chức năng)
-   Cải tiến so với v2:
-   1. Toast notification thay vì im lặng khi thao tác thành công.
-   2. Badge đếm số giao dịch ở tiêu đề bảng.
-   3. Hiển thị ngày hiện tại ở header.
-   4. Nút "Thêm nhanh" scroll tới form + focus.
-   5. Phím tắt: Ctrl+N (thêm nhanh), Ctrl+D (đổi theme).
-   6. Empty state có icon đẹp hơn.
-   7. Hiển thị "xu hướng" số dư so với tháng trước.
-   8. Debounce tìm kiếm để tránh lag khi gõ nhanh.
-   9. Animation mượt khi thêm dòng mới.
-   10. Focus trap trong modal xác nhận.
-   11. Validate ngày không được ở tương lai.
-   12. Hiển thị tổng số tiền theo bộ lọc đang áp dụng.
+   SỔ CHI TIÊU — script.js (v3.1 — Fix modal luôn hiện khi load)
+   Fix chính:
+   - Dùng class "is-open" thay vì chỉ dựa vào thuộc tính [hidden],
+     tránh xung đột với CSS display:flex của .modal-overlay.
+   - Đảm bảo modal & toast LUÔN ẩn khi khởi tạo (set cả hidden + class).
+   - Focus trap trong modal an toàn hơn, không tự focus khi load.
    ===================================================================== */
 
 (function () {
@@ -198,8 +190,11 @@
   function showToast(message, type = "success") {
     clearTimeout(toastTimer);
     el.toast.textContent = message;
-    el.toast.className = "toast show " + type;
+    el.toast.className = "toast " + type;
     el.toast.hidden = false;
+    // force reflow để animation chạy lại mỗi lần
+    void el.toast.offsetWidth;
+    el.toast.classList.add("show");
     toastTimer = setTimeout(() => {
       el.toast.classList.remove("show");
       setTimeout(() => { el.toast.hidden = true; }, 300);
@@ -358,17 +353,20 @@
   });
 
   /* ====================================================================
-     CONFIRM MODAL — với focus trap
+     CONFIRM MODAL — [FIX] dùng class "is-open" để hiện/ẩn rõ ràng
      ==================================================================== */
   function showConfirmModal(message, onConfirm) {
     previousFocusEl = document.activeElement;
     el.confirmModalMessage.textContent = message;
     pendingConfirmAction = onConfirm;
     el.confirmModal.hidden = false;
-    el.confirmModalOk.focus();
+    el.confirmModal.classList.add("is-open");
+    // Focus sau 1 nhịp để tránh block khi element vừa mới hiện
+    setTimeout(() => el.confirmModalOk.focus(), 30);
   }
 
   function hideConfirmModal() {
+    el.confirmModal.classList.remove("is-open");
     el.confirmModal.hidden = true;
     pendingConfirmAction = null;
     if (previousFocusEl && typeof previousFocusEl.focus === "function") {
@@ -978,6 +976,12 @@
   }
 
   function init() {
+    // [FIX] Đảm bảo modal & toast luôn ẩn khi khởi tạo, bất kể HTML/CSS
+    el.confirmModal.hidden = true;
+    el.confirmModal.classList.remove("is-open");
+    el.toast.hidden = true;
+    el.toast.classList.remove("show");
+
     initTheme();
     renderDateLabel();
     populateCategorySelect();

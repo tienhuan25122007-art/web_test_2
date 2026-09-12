@@ -1,6 +1,12 @@
 /* =====================================================================
-   SỔ CHI TIÊU — Design tokens (v2 — Tối ưu UI/UX)
+   SỔ CHI TIÊU — Design tokens (v2.1 — Fix modal hidden)
    ===================================================================== */
+
+/* [FIX] Đảm bảo [hidden] luôn thắng mọi rule display:flex/grid/block khác.
+   Nguyên nhân bug: .modal-overlay có display:flex ghi đè display:none
+   mặc định của thuộc tính [hidden] → modal luôn hiện khi vào trang. */
+[hidden]{ display: none !important; }
+
 :root{
   --paper: #F4F6F0;
   --paper-2: #EBEEE6;
@@ -117,7 +123,6 @@ button, input, select, textarea{ font-family: inherit; font-size: inherit; color
   font-size: 30px;
   color: var(--gold);
   font-style: italic;
-  line-height: 1;
   display: inline-block;
   width: 42px; height: 42px;
   text-align: center;
