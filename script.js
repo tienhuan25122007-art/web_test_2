@@ -976,17 +976,110 @@
   }
 
   function init() {
-    // [FIX] Đảm bảo modal & toast luôn ẩn khi khởi tạo, bất kể HTML/CSS
+    // ------------------------------------------------------------------
+    // [FIX 1] Đảm bảo modal & toast LUÔN ẩn khi khởi tạo
+    // (tránh bug "modal xác nhận hiện ngay khi vào trang" do CSS
+    // display:flex ghi đè thuộc tính [hidden])
+    // ------------------------------------------------------------------
     el.confirmModal.hidden = true;
     el.confirmModal.classList.remove("is-open");
+
     el.toast.hidden = true;
     el.toast.classList.remove("show");
 
+    // ------------------------------------------------------------------
+    // [FIX 2] Nếu đang có file input restore từ lần trước thì reset
+    // (tránh trình duyệt cache file đã chọn)
+    // ------------------------------------------------------------------
+    const restoreInput = document.getElementById("restoreFileInput");
+    if (restoreInput) restoreInput.value = "";
+
+    // ------------------------------------------------------------------
+    // [BƯỚC 1] Khởi tạo theme (sáng/tối) — phải chạy trước khi vẽ chart
+    // vì chart lấy màu từ CSS variable của theme hiện tại
+    // ------------------------------------------------------------------
     initTheme();
+
+    // ------------------------------------------------------------------
+    // [BƯỚC 2] Hiển thị ngày hôm nay ở header
+    // ------------------------------------------------------------------
     renderDateLabel();
+
+    // ------------------------------------------------------------------
+    // [BƯỚC 3] Đổ danh mục vào dropdown "Danh mục" của form
+    // ------------------------------------------------------------------
     populateCategorySelect();
+
+    // ------------------------------------------------------------------
+    // [BƯỚC 4] Set ngày mặc định cho ô "Ngày" trên form
+    // ------------------------------------------------------------------
+    el.dateInput.value = todayIso();
+    el.dateInput.max = todayIso();
+
+    // ------------------------------------------------------------------
+    // [BƯỚC 5] Vẽ toàn bộ giao diện: summary, table, categories, charts
+    // ------------------------------------------------------------------
     refreshAll();
+
+    // ------------------------------------------------------------------
+    // [BƯỚC 6] EXPOSE API cho module ngoài (backup.js)
+    // backup.js cần gọi showToast() và showConfirmModal() của script.js
+    // để UI thống nhất — không dùng alert/confirm mặc định của browser
+    // ------------------------------------------------------------------
+    window.showToast = showToast;
+    window.showConfirmModal = showConfirmModal;
+    window.hideConfirmModal = hideConfirmModal;
+    window.refreshAll = refreshAll;
+
+    // Expose thêm các hàm tiện ích mà backup.js có thể cần
+    window.appUtils = {
+      todayIso,
+      formatCurrency,
+      formatDateDisplay,
+    };
+
+    // ------------------------------------------------------------------
+    // [BƯỚC 7] Lắng nghe sự kiện phục hồi từ backup.js
+    // Khi người dùng import file JSON, backup.js ghi localStorage rồi
+    // phát sự kiện "backup:restored". Ta reload lại state và vẽ lại UI
+    // ------------------------------------------------------------------
+    window.addEventListener("backup:restored", () => {
+      // Đọc lại từ localStorage (đã bị backup.js ghi đè)
+      transactions = loadTransactions();
+      categories = loadCategories();
+
+      // Reset filter về mặc định
+      filters = { type: "all", category: "all", from: "", to: "", search: "" };
+      el.searchInput.value = "";
+      el.filterType.value = "all";
+      el.filterCategory.value = "all";
+      el.filterFrom.value = "";
+      el.filterTo.value = "";
+
+      // Thoát chế độ sửa nếu đang sửa dở
+      if (editingId) exitEditMode();
+
+      // Về trang 1
+      currentPage = 1;
+
+      // Vẽ lại toàn bộ UI
+      populateCategorySelect();
+      refreshAll();
+
+      console.log("✅ Đã phục hồi dữ liệu từ file backup");
+    });
+
+    // ------------------------------------------------------------------
+    // [BƯỚC 8] Log khởi tạo thành công
+    // ------------------------------------------------------------------
+    console.log(
+      `📒 Sổ Chi Tiêu đã sẵn sàng — ${transactions.length} giao dịch, ` +
+      `${categories.income.length + categories.expense.length} danh mục`
+    );
   }
 
+  /* --------------------------------------------------------------------
+     KHỞI CHẠY
+     -------------------------------------------------------------------- */
   init();
 })();
