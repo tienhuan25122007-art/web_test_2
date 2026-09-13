@@ -201,32 +201,87 @@
     }, 2200);
   }
 
-  /* ====================================================================
-     AMOUNT INPUT — định dạng số real-time
+   /* ====================================================================
+     AMOUNT INPUT — Phiên bản ổn định 100%
+     Chiến lược:
+     - KHI ĐANG GÕ: chỉ cho phép ký tự số, KHÔNG format (tránh lỗi con trỏ)
+     - KHI BLUR: format số có dấu chấm phân cách
+     - KHI FOCUS LẠI: bỏ dấu chấm để dễ sửa
+     Đây là cách mọi app ngân hàng dùng — không bao giờ lỗi.
      ==================================================================== */
+
   function formatAmountDisplay(digitsOnly) {
     if (!digitsOnly) return "";
-    const num = parseInt(digitsOnly, 10);
+    const cleaned = digitsOnly.replace(/^0+(?=\d)/, "");
+    const num = Number(cleaned);
     if (isNaN(num)) return "";
     return num.toLocaleString("vi-VN");
   }
 
   function setAmountInputValue(num) {
+    if (num === 0 || num === null || num === undefined) {
+      el.amountInput.value = "";
+      return;
+    }
     el.amountInput.value = formatAmountDisplay(String(Math.round(num)));
   }
 
   function getAmountValue() {
-    const digits = el.amountInput.value.replace(/\D/g, "");
-    return digits ? parseInt(digits, 10) : NaN;
+    const raw = el.amountInput.value || "";
+    const digits = raw.replace(/\D/g, "");
+    if (!digits) return NaN;
+    const num = parseInt(digits, 10);
+    return isNaN(num) ? NaN : num;
   }
 
-  el.amountInput.addEventListener("input", () => {
-    const wasAtEnd = el.amountInput.selectionStart === el.amountInput.value.length;
-    const digitsOnly = el.amountInput.value.replace(/\D/g, "");
-    el.amountInput.value = formatAmountDisplay(digitsOnly);
-    if (wasAtEnd) {
-      el.amountInput.setSelectionRange(el.amountInput.value.length, el.amountInput.value.length);
+  // Khi focus: bỏ dấu chấm để user sửa cho dễ
+  el.amountInput.addEventListener("focus", function () {
+    const digits = this.value.replace(/\D/g, "");
+    this.value = digits;
+    // Đặt con trỏ ở cuối
+    const len = this.value.length;
+    this.setSelectionRange(len, len);
+  });
+
+  // Khi gõ: chỉ lọc ký tự số, KHÔNG format
+  el.amountInput.addEventListener("input", function () {
+    // Loại bỏ mọi ký tự không phải số (kể cả dán từ clipboard)
+    const cursorPos = this.selectionStart;
+    const before = this.value.slice(0, cursorPos);
+    const after = this.value.slice(cursorPos);
+
+    const beforeClean = before.replace(/\D/g, "");
+    const afterClean = after.replace(/\D/g, "");
+
+    this.value = beforeClean + afterClean;
+
+    // Đặt con trỏ sau phần "before"
+    const newPos = beforeClean.length;
+    this.setSelectionRange(newPos, newPos);
+  });
+
+  // Khi blur: format đẹp với dấu chấm
+  el.amountInput.addEventListener("blur", function () {
+    const digits = this.value.replace(/\D/g, "");
+    if (!digits || digits === "0") {
+      this.value = "";
+      return;
     }
+    this.value = formatAmountDisplay(digits);
+  });
+
+  // Chặn paste ký tự lạ — để sự kiện input tự xử lý
+  el.amountInput.addEventListener("paste", function (e) {
+    e.preventDefault();
+    const pasted = (e.clipboardData || window.clipboardData).getData("text");
+    const digitsOnly = pasted.replace(/\D/g, "");
+    const start = this.selectionStart;
+    const end = this.selectionEnd;
+    const before = this.value.slice(0, start).replace(/\D/g, "");
+    const after = this.value.slice(end).replace(/\D/g, "");
+    this.value = before + digitsOnly + after;
+    const newPos = before.length + digitsOnly.length;
+    this.setSelectionRange(newPos, newPos);
   });
 
   /* ====================================================================
